@@ -24,7 +24,6 @@ def to_cuda(batch):
 def train_with_negative(
     args, p_encoder, q_encoder, train_dataset, valid_dataset, num_neg
 ):
-    # Dataloader
     wandb.login()
     wandb.init(
         project="retrieval_aug",
@@ -103,9 +102,9 @@ def train_with_negative(
     q_encoder.zero_grad()
     torch.cuda.empty_cache()
 
-    best_loss = 9999  # valid_loss
-    best_acc = -1
-    num_epoch = 0
+    best_loss = 9999  # valid_loss를 저장하는 변수
+    best_acc = -1 # acc를 저장하는 변수
+    num_epoch = 0 
 
     for _ in range(int(args.num_train_epochs)):
         epoch_iterator = tqdm(train_dataloader, desc="Iteration")
@@ -118,15 +117,16 @@ def train_with_negative(
             q_encoder.train()
             p_encoder.train()
 
-            # if torch.cuda.is_available():
-            #     batch = tuple(t.cuda() for t in batch)
-
             neg_batch_ids = []
             neg_batch_att = []
             neg_batch_tti = []
             random_sampling_idx = random.randrange(0, num_neg)
-            # random_sampling_idx = num_epoch
             for batch_in_sample_idx in range(args.per_device_train_batch_size):
+                '''
+                question과 pos passage는 1대1로 매칭이 되지만
+                hard negative sample들은 해당 question에 대해 num_neg의 수만큼 매칭이 되기 때문에
+                매 학습 루프마다 한개를 랜덤하게 뽑아서 pos passage와 concat을 하여 사용하게 됩니다.
+                '''
                 neg_batch_ids.append(
                     batch[3][:][batch_in_sample_idx][random_sampling_idx].unsqueeze(0)
                 )
@@ -159,14 +159,11 @@ def train_with_negative(
                 q_outputs, torch.transpose(p_outputs, 0, 1)
             )  # (batch_size, emb_dim) x (emb_dim, batch_size * 2) = (batch_size, batch_size * 2)
 
-            # target: position of positive samples = diagonal element
+            # 정답은 대각선의 성분들 -> 0 1 2 ... batch_size - 1
             targets = torch.arange(0, args.per_device_train_batch_size).long()
             if torch.cuda.is_available():
                 targets = targets.to("cuda")
 
-            # print(sim_scores)
-            # print()
-            # print(targets)
             sim_scores = F.log_softmax(sim_scores, dim=1)
             loss = F.nll_loss(sim_scores, targets)
             train_loss += loss.item()
@@ -193,7 +190,8 @@ def train_with_negative(
                         q_encoder.eval()
                         p_encoder.eval()
 
-                        cur_batch_size = batch[0].size()[0]  # 마지막 배치 때문에
+                        cur_batch_size = batch[0].size()[0]  
+                        # 마지막 배치의 drop last를 안하기 때문에 단순 batch_size를 사용하면 에러발생
                         if torch.cuda.is_available():
                             batch = tuple(t.cuda() for t in batch)
                         p_inputs = {
@@ -234,6 +232,8 @@ def train_with_negative(
                 print(f"valid acc: {valid_acc}")
                 wandb.log({"valid loss": valid_loss, "valid acc": valid_acc})
                 if best_loss > valid_loss:
+                    # valid_loss가 작아질 때만 저장하고 best_loss와 best_acc를 업데이트
+                    # acc에 대해서도 가능합니다.
                     print("best model save")
                     p_encoder.save_pretrained(args.output_dir + "/p_encoder")
                     q_encoder.save_pretrained(args.output_dir + "/q_encoder")
@@ -247,7 +247,6 @@ def train_with_negative(
         print(f"train loss: {train_loss}")
         print(f"train acc: {train_acc}")
 
-        # valid_loss가 작아질 때만 저장
     wandb.finish()
     return p_encoder, q_encoder
 
